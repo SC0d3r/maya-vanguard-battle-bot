@@ -6,7 +6,9 @@ same public API the ladder page uses, works offline from a saved response, and n
 dependencies beyond Node 18+.
 
 The badge is meant to be committed (or regenerated on a schedule) and displayed in a README,
-linking back to the bot page:
+linking back to the bot page. Rendered from the bundled fixture, it looks like this:
+
+![example badge](example.svg)
 
 ```md
 [![battle.training](badge.svg)](https://battle.training/bots/maya-vanguard)
