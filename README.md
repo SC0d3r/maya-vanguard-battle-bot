@@ -18,14 +18,21 @@ The controller is pure logic over the observation the arena sends: no network, n
 - **Movement:** breadth-first distance fields from every control point, one gradient step per tick, with
   corner-safe diagonal movement and a blocked-tick reverse-and-steer fallback.
 - **APCs** park inside the radius they capture (capture weight ×2) and fight with their turret instead of
-  chasing contacts off the point.
-- **MBTs** stand off 12–14 tiles and use their 30-tile gun; they back away from knife-range contacts.
-- **Scouts** escort the centre hill, kite at 12–14 tiles, and turn the hull onto a lead-corrected aim point
-  because their gun is fixed to the hull.
+  chasing contacts off the point — leaving the radius would stop the point scoring.
+- **MBTs** hold the same radius and use their independent turret and 30-tile gun from inside it; the point
+  stays contested instead of being handed to a lone enemy that walks in.
+- **Scouts** escort the centre hill, and on two-point maps cross to the second point once the first is held
+  and quiet. They kite at 11–13 tiles and turn the hull onto a lead-corrected aim point because their gun
+  is fixed to the hull.
 - **Drones** orbit the main point at 9 tiles for vision; they disengage when a ground unit gets close.
 - **Artillery / missile carriers**, if drafted, hold a stand-off position behind the point and use
   lead-corrected indirect fire / lock-on fire.
 - Incoming artillery is dodged when the predicted impact is close.
+
+## Ranked play
+
+The bot plays the public ladder and the November Cup around the clock. Its live rating and set count are on the
+bot page: https://battle.training/bots/maya-vanguard
 
 ## Reproduce locally
 

@@ -1,8 +1,9 @@
-// maya-vanguard — battle.training season 2 controller (v2)
-// Original controller. Movement uses per-objective BFS distance fields built in hello(),
-// objective assignments are sticky (planned once, never re-ranked), APCs hold the point
-// they capture, MBTs fight from range, scouts escort and aim their fixed gun by turning
-// the hull, drones orbit for vision. No network, no clock, no model call.
+// maya-vanguard — battle.training season 2 controller (v3)
+// Original controller. Movement uses per-objective BFS distance fields built in hello().
+// Objective assignments are sticky (planned once, never re-ranked). APCs and MBTs hold
+// the point they own, fighting with their turrets from inside the radius; the scout
+// escorts and opportunistically contests the second point on two-point maps; the drone
+// orbits for vision. No network, no clock, no model call.
 //
 // Units are integers; positions and ranges are Q16.16 tiles, angles 4096 = full turn.
 
@@ -10,13 +11,14 @@ const FP = 65536;
 const FULL = 4096;
 const TAU = Math.PI * 2;
 
-// Draft is map-adaptive: two flank points + centre hill gets two APCs (one per point),
-// a forest of two flank points gets one APC plus a drone for vision.
-let DRAFT_PAIR = ["apc", "mbt", "drone", "scout"];
-let DRAFT_TRIPLE = ["apc", "apc", "mbt", "scout"];
+// Two flank points: APC for capture weight, MBT to defend the point, drone for vision,
+// scout as the mobile flanker. Three points add a second APC for the centre hill.
+const DRAFT_PAIR = ["apc", "mbt", "drone", "scout"];
+const DRAFT_TRIPLE = ["apc", "apc", "mbt", "scout"];
 
 let R, M, SIDE, W, H, PASS, FIELDS, OBJS, SPAWN, ENEMY_SPAWN, HILL;
 let ASSIGN = null; // unit id -> objective index, planned once
+let FAR_IDX = -1;  // the other point on a two-point map
 let sayTick = -9999;
 
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
@@ -118,6 +120,7 @@ function drive(u, gx, gy, field, stopRadius) {
 // flank and, when there is one, the centre hill). The rest defend the near flank.
 function planAssignments(units) {
   ASSIGN = new Map();
+  FAR_IDX = -1;
   if (!OBJS.length || !units || !units.length) return;
   const order = OBJS.map((o, i) => ({ i, o, d: dist(SPAWN[0], SPAWN[1], o.x, o.y) }))
     .sort((a, b) => a.d - b.d);
@@ -125,6 +128,7 @@ function planAssignments(units) {
   let hill = -1;
   for (const x of order) if (x.o.radius >= 5.5 * FP) { hill = x.i; break; }
   const far = order[order.length - 1].i;
+  if (OBJS.length === 2) FAR_IDX = far === near ? -1 : far;
   let apcN = 0;
   for (const u of units) {
     if (u.kind === "apc") { ASSIGN.set(u.id, apcN === 0 ? near : (hill >= 0 ? hill : far)); apcN++; }
@@ -232,29 +236,45 @@ globalThis.controller = {
       const order = { id: u.id };
       const dodge = incomingDanger(o, u);
 
-      const tIdx = ASSIGN.has(u.id) ? ASSIGN.get(u.id) : 0;
-      const t = OBJS[tIdx] || { x: HILL[0], y: HILL[1], radius: 5 * FP, weight: 1 };
-      const tRad = t.radius || 5 * FP;
+      let tIdx = ASSIGN.has(u.id) ? ASSIGN.get(u.id) : 0;
+      let t = OBJS[tIdx] || { x: HILL[0], y: HILL[1], radius: 5 * FP, weight: 1 };
+      let tRad = t.radius || 5 * FP;
+
+      // Scout on a two-point map: once our point is held and quiet, cross to the
+      // other point and make its owner fight for it.
+      if (u.kind === "scout" && FAR_IDX >= 0) {
+        const mine = o.objectives[tIdx];
+        const held = mine && mine.owner === SIDE;
+        let threat = false;
+        for (const c of o.contacts) {
+          if (dist(c.x, c.y, t.x, t.y) < 18 * FP) { threat = true; break; }
+        }
+        if (held && !threat) {
+          tIdx = FAR_IDX;
+          t = OBJS[tIdx];
+          tRad = t.radius || 5 * FP;
+        }
+      }
+
       const tDist = dist(u.x, u.y, t.x, t.y);
       let field = FIELDS[tIdx] || null;
-
       const gunRange = (spec.gun && spec.gun.maxRange) || 0;
       const cAny = nearestContact(o, u, Math.max(gunRange, spec.sensorRange || 0));
       const cGun = nearestContact(o, u, gunRange);
 
       // ---- movement goal: hold the assigned control point ----
-      let gx = t.x, gy = t.y, stop = tRad * 0.55;
+      // A small lateral offset per unit keeps the squad from queueing on one tile.
+      const approach = angleTo(SPAWN[0], SPAWN[1], t.x, t.y);
+      const perp = (approach / FULL) * TAU + Math.PI / 2;
+      const slot = ((u.id % 3) - 1) * 1.1 * FP;
+      const holdX = t.x + Math.cos(perp) * slot;
+      const holdY = t.y + Math.sin(perp) * slot;
+      let gx = holdX, gy = holdY, stop = tRad * 0.5;
 
-      if (u.kind === "apc") {
-        // The APC owns the point: get inside the radius and stay there. Its turret
-        // does the fighting, so it never chases a contact off the point.
-        gx = t.x; gy = t.y; stop = tRad * 0.55;
-      } else if (u.kind === "mbt") {
-        // Stand off the point: the MBT outranges every other ground gun (30 tiles).
-        gx = t.x; gy = t.y; stop = 9 * FP;
+      if (u.kind === "mbt") {
+        stop = tRad * 0.45;
       } else if (u.kind === "scout") {
-        // Escort: sit just inside/at the edge of the point, fast enough to fall back.
-        gx = t.x; gy = t.y; stop = Math.max(2 * FP, tRad * 0.8);
+        stop = tRad * 0.7;
       } else if (u.kind === "drone") {
         const a = (o.tick * 0.011) + (u.id % 5) * 1.3;
         gx = t.x + Math.cos(a) * 9 * FP;
@@ -262,8 +282,7 @@ globalThis.controller = {
         stop = 0;
         field = null;
       } else if (u.kind === "artillery" || u.kind === "missile") {
-        const a = angleTo(t.x, t.y, SPAWN[0], SPAWN[1]);
-        const rad = (a / FULL) * TAU;
+        const rad = (approach / FULL) * TAU;
         const keep = u.kind === "artillery" ? 24 * FP : 14 * FP;
         gx = t.x + Math.cos(rad) * keep;
         gy = t.y + Math.sin(rad) * keep;
@@ -271,42 +290,28 @@ globalThis.controller = {
         stop = 4 * FP;
         if (u.ammo === 0) { gx = SPAWN[0]; gy = SPAWN[1]; field = null; stop = 2 * FP; }
       } else if (u.kind === "engineer") {
-        gx = t.x; gy = t.y; stop = tRad * 1.1;
+        stop = tRad * 0.6;
         if (cAny && dist(u.x, u.y, cAny.x, cAny.y) < 9 * FP && u.charges && u.charges.smoke > 0) {
           order.ability = "smoke";
         }
       }
 
       // ---- combat movement ----
-      // MBT: keep 12-14 tiles, which is inside its 30-tile gun range but outside an
-      // APC (14) or scout (18) knife range. Scout: kite at 12-14 tiles and let the
-      // hull point, because its gun is fixed to the hull.
-      if (cGun && (u.kind === "mbt" || u.kind === "scout")) {
+      // Only the scout manoeuvres: it kites at 11-13 tiles and aims its fixed gun by
+      // turning the hull. APC and MBT stay inside the point and let the turret work,
+      // because leaving the radius means the point stops scoring.
+      if (u.kind === "scout" && cGun) {
         const d = dist(u.x, u.y, cGun.x, cGun.y);
-        if (u.kind === "mbt") {
-          if (d < 10 * FP) {
+        if (tDist < 22 * FP && d < gunRange * 0.95) {
+          gx = cGun.x; gy = cGun.y; field = null;
+          if (d < 6 * FP) {
             const a = angleTo(cGun.x, cGun.y, u.x, u.y);
             const rad = (a / FULL) * TAU;
-            gx = u.x + Math.cos(rad) * 9 * FP;
-            gy = u.y + Math.sin(rad) * 9 * FP;
-            field = null; stop = 0;
+            gx = u.x + Math.cos(rad) * 8 * FP;
+            gy = u.y + Math.sin(rad) * 8 * FP;
+            stop = 0;
           } else {
-            gx = cGun.x; gy = cGun.y; field = null; stop = 13 * FP;
-          }
-        } else {
-          // scout: do not chase far from the point it is escorting
-          if (tDist < 20 * FP) {
-            if (d < 9 * FP) {
-              const a = angleTo(cGun.x, cGun.y, u.x, u.y);
-              const rad = (a / FULL) * TAU;
-              gx = u.x + Math.cos(rad) * 8 * FP;
-              gy = u.y + Math.sin(rad) * 8 * FP;
-              field = null; stop = 0;
-            } else if (d > 14 * FP) {
-              gx = cGun.x; gy = cGun.y; field = null; stop = 13 * FP;
-            } else {
-              gx = cGun.x; gy = cGun.y; field = null; stop = d;
-            }
+            stop = 11 * FP;
           }
         }
       }
