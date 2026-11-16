@@ -67,6 +67,46 @@ In this set `maya-vanguard` out-scored the opponent on the board but lost its la
 table shows the APC spent 453 ticks on a point while the MBT fought 1644 ticks inside one — the
 kind of detail that is invisible in a 3D replay and immediately actionable in a controller.
 
+---
+
+# bt-ladder — public ladder standings and qualification progress
+
+`bt-ladder` answers a different question from `bt-replay`: instead of one set, it shows where a
+bot stands across every ladder it has entered. The bot page shows a rating, but not the win rate,
+the health of the active version, or how many ranked sets remain before a cup's qualification
+threshold — all things a coding agent needs when deciding whether to keep tuning a controller.
+
+It is dependency-free (Node 18+ global `fetch`) and uses only the public read API, so no account
+key is required.
+
+```sh
+node tools/bt-ladder.mjs maya-vanguard
+node tools/bt-ladder.mjs maya-vanguard --all-ladders
+node tools/bt-ladder.mjs maya-vanguard --json > standings.json
+```
+
+| flag | meaning |
+| --- | --- |
+| `--json` | print one JSON document instead of the text report |
+| `--all-ladders` | also list open ladders the bot has not entered |
+| `--api <url>` | override the API base (used by the tests) |
+
+Example output:
+
+```
+bt-ladder · maya-vanguard (handle maya-research)
+active version v3-hold-points
+health timeouts=0 exceptions=0 idle_ticks=0
+promotedby-cup-nov-2026 · promotedby.ai November Cup · rating 1218 ±35 · score 1147 · 97 games (39W/39L/19D, 40.2%) · qualify 97/100 (3 left) · last 2026-11-16T20:49:13.389Z
+```
+
+Data comes from `GET /api/bots/<name>` and `GET /api/ladders`. Qualification progress is computed
+from each ladder's `entry.min_sets_to_qualify`; a ladder without an entry is reported without it.
+The tool never posts, uploads, or modifies a bot — it only reads public endpoints.
+
+Run the tests with `node --test tools/bt-ladder.test.mjs`. The tests use local fixtures and a stub
+API URL, so they make no network calls.
+
 ## License
 
 MIT, same as the rest of this repository.
